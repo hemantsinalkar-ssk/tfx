@@ -22,7 +22,7 @@ import json
 import os
 import threading
 import time
-from typing import Any, Callable, Dict, Iterator, List, Mapping, Optional, Set, Tuple, cast
+from typing import Any, Callable, Dict, Iterator, List, Mapping, Optional, Set, Tuple
 import uuid
 
 from absl import logging
@@ -424,38 +424,29 @@ class _PipelineIRCodec:
     with cls._lock:
       cls._obj = None
 
+  def __init__(self):
+    self.base_dir = env.get_env().get_base_dir()
+    if self.base_dir:
+      self.pipeline_irs_dir = os.path.join(self.base_dir,
+                                           self._ORCHESTRATOR_METADATA_DIR,
+                                           self._PIPELINE_IRS_DIR)
+      fileio.makedirs(self.pipeline_irs_dir)
+    else:
+      self.pipeline_irs_dir = None
+
   def encode(self, pipeline: pipeline_pb2.Pipeline) -> str:
     """Encodes pipeline IR."""
     # Attempt to store as a base64 encoded string. If base_dir is provided
     # and the length is too large, store the IR on disk and retain the URL.
     # TODO(b/248786921): Always store pipeline IR to base_dir once the
     # accessibility issue is resolved.
-
-    # Note that this setup means that every *subpipeline* will have its own
-    # "irs" dir. This is fine, though ideally we would put all pipeline IRs
-    # under the root pipeline dir, which would require us to *also* store the
-    # root pipeline dir in the IR.
-
-    base_dir = pipeline.runtime_spec.pipeline_root.field_value.string_value
-    if base_dir:
-      pipeline_ir_dir = os.path.join(
-          base_dir, self._ORCHESTRATOR_METADATA_DIR, self._PIPELINE_IRS_DIR
-      )
-      fileio.makedirs(pipeline_ir_dir)
-    else:
-      pipeline_ir_dir = None
     pipeline_encoded = _base64_encode(pipeline)
     max_mlmd_str_value_len = env.get_env().max_mlmd_str_value_length()
-    if (
-        base_dir
-        and pipeline_ir_dir
-        and max_mlmd_str_value_len is not None
-        and len(pipeline_encoded) > max_mlmd_str_value_len
-    ):
+    if self.base_dir and max_mlmd_str_value_len is not None and len(
+        pipeline_encoded) > max_mlmd_str_value_len:
       pipeline_id = task_lib.PipelineUid.from_pipeline(pipeline).pipeline_id
-      pipeline_url = os.path.join(
-          pipeline_ir_dir, f'{pipeline_id}_{uuid.uuid4()}.pb'
-      )
+      pipeline_url = os.path.join(self.pipeline_irs_dir,
+                                  f'{pipeline_id}_{uuid.uuid4()}.pb')
       with fileio.open(pipeline_url, 'wb') as file:
         file.write(pipeline.SerializeToString())
       pipeline_encoded = json.dumps({self._PIPELINE_IR_URL_KEY: pipeline_url})
@@ -557,8 +548,7 @@ class PipelineState:
     self._mlmd_execution_atomic_op_context = None
     self._execution: Optional[metadata_store_pb2.Execution] = None
     self._on_commit_callbacks: List[Callable[[], None]] = []
-    # The note state proxy is assumed to be initialized before being used.
-    self._node_states_proxy: _NodeStatesProxy = cast(_NodeStatesProxy, None)
+    self._node_states_proxy: Optional[_NodeStatesProxy] = None
 
   @classmethod
   @telemetry_utils.noop_telemetry(metrics_utils.no_op_metrics)
@@ -917,29 +907,26 @@ class PipelineState:
 
   @property
   def execution(self) -> metadata_store_pb2.Execution:
-    if self._execution is None:
-      raise RuntimeError(
-          'Operation must be performed within the pipeline state context.'
-      )
+    self._check_context()
     return self._execution
 
   def is_active(self) -> bool:
     """Returns `True` if pipeline is active."""
-    return execution_lib.is_execution_active(self.execution)
+    self._check_context()
+    return execution_lib.is_execution_active(self._execution)
 
   def initiate_stop(self, status: status_lib.Status) -> None:
     """Updates pipeline state to signal stopping pipeline execution."""
+    self._check_context()
     data_types_utils.set_metadata_value(
-        self.execution.custom_properties[_STOP_INITIATED], 1
-    )
+        self._execution.custom_properties[_STOP_INITIATED], 1)
     data_types_utils.set_metadata_value(
-        self.execution.custom_properties[_PIPELINE_STATUS_CODE],
-        int(status.code),
-    )
+        self._execution.custom_properties[_PIPELINE_STATUS_CODE],
+        int(status.code))
     if status.message:
       data_types_utils.set_metadata_value(
-          self.execution.custom_properties[_PIPELINE_STATUS_MSG], status.message
-      )
+          self._execution.custom_properties[_PIPELINE_STATUS_MSG],
+          status.message)
 
   @_synchronized
   def initiate_resume(self) -> None:
@@ -998,24 +985,21 @@ class PipelineState:
 
     env.get_env().prepare_orchestrator_for_pipeline_run(updated_pipeline)
     data_types_utils.set_metadata_value(
-        self.execution.custom_properties[_UPDATED_PIPELINE_IR],
-        _PipelineIRCodec.get().encode(updated_pipeline),
-    )
+        self._execution.custom_properties[_UPDATED_PIPELINE_IR],
+        _PipelineIRCodec.get().encode(updated_pipeline))
     data_types_utils.set_metadata_value(
-        self.execution.custom_properties[_UPDATE_OPTIONS],
-        _base64_encode(update_options),
-    )
+        self._execution.custom_properties[_UPDATE_OPTIONS],
+        _base64_encode(update_options))
 
   def is_update_initiated(self) -> bool:
-    return (
-        self.is_active()
-        and self.execution.custom_properties.get(_UPDATED_PIPELINE_IR)
-        is not None
-    )
+    self._check_context()
+    return self.is_active() and self._execution.custom_properties.get(
+        _UPDATED_PIPELINE_IR) is not None
 
   def get_update_options(self) -> pipeline_pb2.UpdateOptions:
     """Gets pipeline update option that was previously configured."""
-    update_options = self.execution.custom_properties.get(_UPDATE_OPTIONS)
+    self._check_context()
+    update_options = self._execution.custom_properties.get(_UPDATE_OPTIONS)
     if update_options is None:
       logging.warning(
           'pipeline execution missing expected custom property %s, '
@@ -1026,18 +1010,17 @@ class PipelineState:
 
   def apply_pipeline_update(self) -> None:
     """Applies pipeline update that was previously initiated."""
+    self._check_context()
     updated_pipeline_ir = _get_metadata_value(
-        self.execution.custom_properties.get(_UPDATED_PIPELINE_IR)
-    )
+        self._execution.custom_properties.get(_UPDATED_PIPELINE_IR))
     if not updated_pipeline_ir:
       raise status_lib.StatusNotOkError(
           code=status_lib.Code.INVALID_ARGUMENT,
           message='No updated pipeline IR to apply')
     data_types_utils.set_metadata_value(
-        self.execution.properties[_PIPELINE_IR], updated_pipeline_ir
-    )
-    del self.execution.custom_properties[_UPDATED_PIPELINE_IR]
-    del self.execution.custom_properties[_UPDATE_OPTIONS]
+        self._execution.properties[_PIPELINE_IR], updated_pipeline_ir)
+    del self._execution.custom_properties[_UPDATED_PIPELINE_IR]
+    del self._execution.custom_properties[_UPDATE_OPTIONS]
     self.pipeline = _PipelineIRCodec.get().decode(updated_pipeline_ir)
 
   def is_stop_initiated(self) -> bool:
@@ -1046,7 +1029,8 @@ class PipelineState:
 
   def stop_initiated_reason(self) -> Optional[status_lib.Status]:
     """Returns status object if stop initiated, `None` otherwise."""
-    custom_properties = self.execution.custom_properties
+    self._check_context()
+    custom_properties = self._execution.custom_properties
     if _get_metadata_value(custom_properties.get(_STOP_INITIATED)) == 1:
       code = _get_metadata_value(custom_properties.get(_PIPELINE_STATUS_CODE))
       if code is None:
@@ -1118,44 +1102,45 @@ class PipelineState:
 
   def get_pipeline_execution_state(self) -> metadata_store_pb2.Execution.State:
     """Returns state of underlying pipeline execution."""
-    return self.execution.last_known_state
+    self._check_context()
+    return self._execution.last_known_state
 
   def set_pipeline_execution_state(
       self, state: metadata_store_pb2.Execution.State) -> None:
     """Sets state of underlying pipeline execution."""
-    if self.execution.last_known_state != state:
+    self._check_context()
+
+    if self._execution.last_known_state != state:
       self._on_commit_callbacks.append(
-          functools.partial(
-              _log_pipeline_execution_state_change,
-              self.execution.last_known_state,
-              state,
-              self.pipeline_uid,
-          )
-      )
-      self.execution.last_known_state = state
+          functools.partial(_log_pipeline_execution_state_change,
+                            self._execution.last_known_state, state,
+                            self.pipeline_uid))
+      self._execution.last_known_state = state
 
   def get_property(self, property_key: str) -> Optional[types.Property]:
     """Returns custom property value from the pipeline execution."""
     return _get_metadata_value(
-        self.execution.custom_properties.get(property_key)
-    )
+        self._execution.custom_properties.get(property_key))
 
   def save_property(
       self, property_key: str, property_value: types.Property
   ) -> None:
+    self._check_context()
     data_types_utils.set_metadata_value(
-        self.execution.custom_properties[property_key], property_value
+        self._execution.custom_properties[property_key], property_value
     )
 
   def remove_property(self, property_key: str) -> None:
     """Removes a custom property of the pipeline execution if exists."""
-    if self.execution.custom_properties.get(property_key):
-      del self.execution.custom_properties[property_key]
+    self._check_context()
+    if self._execution.custom_properties.get(property_key):
+      del self._execution.custom_properties[property_key]
 
   def pipeline_creation_time_secs_since_epoch(self) -> int:
     """Returns the pipeline creation time as seconds since epoch."""
+    self._check_context()
     # Convert from milliseconds to seconds.
-    return self.execution.create_time_since_epoch // 1000
+    return self._execution.create_time_since_epoch // 1000
 
   def get_orchestration_options(
       self) -> orchestration_options.OrchestrationOptions:
@@ -1203,7 +1188,6 @@ class PipelineState:
     self._mlmd_execution_atomic_op_context = None
     self._execution = None
     try:
-      assert mlmd_execution_atomic_op_context is not None
       mlmd_execution_atomic_op_context.__exit__(exc_type, exc_val, exc_tb)
     finally:
       self._on_commit_callbacks.clear()

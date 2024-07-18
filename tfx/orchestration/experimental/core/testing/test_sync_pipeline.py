@@ -12,7 +12,6 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 """Sync pipeline for testing."""
-import os
 
 from tfx.dsl.compiler import compiler
 from tfx.dsl.component.experimental.annotations import InputArtifact
@@ -83,7 +82,7 @@ def _chore():
   pass
 
 
-def create_pipeline(temp_dir: str = '/') -> pipeline_pb2.Pipeline:
+def create_pipeline() -> pipeline_pb2.Pipeline:
   """Builds a test pipeline.
 
     ┌───────────┐
@@ -107,10 +106,6 @@ def create_pipeline(temp_dir: str = '/') -> pipeline_pb2.Pipeline:
     ┌▽──────┐
     │chore_b │
     └────────┘
-
-  Args:
-    temp_dir: If provieded, a temporary test directory to use as prefix to the
-      pipeline root.
 
   Returns:
     A pipeline proto for the above DAG
@@ -147,7 +142,7 @@ def create_pipeline(temp_dir: str = '/') -> pipeline_pb2.Pipeline:
 
   pipeline = pipeline_lib.Pipeline(
       pipeline_name='my_pipeline',
-      pipeline_root=os.path.join(temp_dir, 'path/to/root'),
+      pipeline_root='/path/to/root',
       components=[
           example_gen,
           stats_gen,
@@ -159,8 +154,7 @@ def create_pipeline(temp_dir: str = '/') -> pipeline_pb2.Pipeline:
           chore_a,
           chore_b,
       ],
-      enable_cache=True,
-  )
+      enable_cache=True)
   dsl_compiler = compiler.Compiler()
   return dsl_compiler.compile(pipeline)
 
@@ -306,9 +300,7 @@ def create_resource_lifetime_pipeline() -> pipeline_pb2.Pipeline:
   return dsl_compiler.compile(pipeline)
 
 
-def create_pipeline_with_subpipeline(
-    temp_dir: str = '/',
-) -> pipeline_pb2.Pipeline:
+def create_pipeline_with_subpipeline() -> pipeline_pb2.Pipeline:
   """Creates a pipeline with a subpipeline."""
   # pylint: disable=no-value-for-parameter
   example_gen = _example_gen().with_id('my_example_gen')
@@ -326,7 +318,7 @@ def create_pipeline_with_subpipeline(
 
   componsable_pipeline = pipeline_lib.Pipeline(
       pipeline_name='sub-pipeline',
-      pipeline_root=os.path.join(temp_dir, 'path/to/root/sub'),
+      pipeline_root='/path/to/root/sub',
       components=[stats_gen, schema_gen],
       enable_cache=True,
       inputs=p_in,
@@ -340,7 +332,7 @@ def create_pipeline_with_subpipeline(
 
   pipeline = pipeline_lib.Pipeline(
       pipeline_name='my_pipeline',
-      pipeline_root=os.path.join(temp_dir, 'path/to/root'),
+      pipeline_root='/path/to/root',
       components=[
           example_gen,
           componsable_pipeline,

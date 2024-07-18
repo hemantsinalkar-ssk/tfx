@@ -477,7 +477,6 @@ class _Generator:
 
     for input_and_param in unprocessed_inputs:
       if backfill_token:
-        assert input_and_param.exec_properties is not None
         input_and_param.exec_properties[
             constants.BACKFILL_TOKEN_CUSTOM_PROPERTY_KEY
         ] = backfill_token

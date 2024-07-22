@@ -21,7 +21,7 @@ pip install -q apache-airflow==2.3.4 Flask Werkzeug
 
 # Resolve dependency conflicts
 pip install email-validator==2.0.0
-pip install sqlalchemy==2.0
+pip install sqlalchemy==1.4.27
 
 printf "${GREEN}Initializing Airflow database${NORMAL}\n"
 airflow db init

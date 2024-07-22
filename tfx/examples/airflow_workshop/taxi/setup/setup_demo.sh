@@ -1,35 +1,16 @@
-#!/bin/bash
-# Copyright 2020 Google LLC. All Rights Reserved.
-#
-# Licensed under the Apache License, Version 2.0 (the "License");
-# you may not use this file except in compliance with the License.
-# You may obtain a copy of the License at
-#
-#      http://www.apache.org/licenses/LICENSE-2.0
-#
-# Unless required by applicable law or agreed to in writing, software
-# distributed under the License is distributed on an "AS IS" BASIS,
-# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-# See the License for the specific language governing permissions and
-# limitations under the License.
-
-
-# Set up the environment for the TFX tutorial
-
-
 GREEN=$(tput setaf 2)
 NORMAL=$(tput sgr0)
 
 printf "${GREEN}Installing TFX workshop${NORMAL}\n\n"
 
 printf "${GREEN}Installing pendulum to avoid problem with tzlocal${NORMAL}\n"
-pip install pendulum
+pip install pendulum==2.1.2
 
 printf "${GREEN}Installing TFX${NORMAL}\n"
 pip install pyarrow==5.0.0 apache_beam==2.38.0 tfx==1.9.1
 
 printf "${GREEN}Installing required packages for tft${NORMAL}\n"
-pip install tensorflow-text==2.9.0 tensorflow-decision-forests==0.2.7 struct2tensor==0.40.0
+pip install tensorflow-text==2.9.0 tensorflow-decision-forests==0.2.7 struct2tensor==0.45.0
 
 # Airflow
 # Set this to avoid the GPL version; no functionality difference either way
@@ -37,6 +18,11 @@ printf "${GREEN}Preparing environment for Airflow${NORMAL}\n"
 export SLUGIFY_USES_TEXT_UNIDECODE=yes
 printf "${GREEN}Installing Airflow${NORMAL}\n"
 pip install -q apache-airflow==2.3.4 Flask Werkzeug
+
+# Resolve dependency conflicts
+pip install email-validator==2.0.0
+pip install sqlalchemy==2.0
+
 printf "${GREEN}Initializing Airflow database${NORMAL}\n"
 airflow db init
 
